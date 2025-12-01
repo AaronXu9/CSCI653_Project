@@ -72,11 +72,70 @@ python run_pipeline.py \
 sbatch run_ensemble_docking.sbatch
 ```
 
+#### Data Engineering for FLOWR.ROOT
+
+After rescoring, convert filtered poses to FLOWR.ROOT training format:
+
+```bash
+# Prepare LMDB database from rescoring results
+python prepare_flowr_data.py \
+    --rescoring_dir rescoring_output \
+    --cluster_dir bioemu_clusters \
+    --output_dir flowr_training_data \
+    --cnn_score_threshold 0.9 \
+    --cnn_affinity_threshold -7.0 \
+    --parallel
+
+# Or use SLURM for large datasets
+sbatch slurm/preprocess.sl
+```
+
+**Output Structure:**
+```
+flowr_training_data/
+├── raw/                    # Exported pose files
+│   ├── system_0001/
+│   │   ├── system_0001_protein.pdb
+│   │   └── system_0001_ligand.sdf
+│   └── manifest.json
+└── final/
+    ├── custom_data.lmdb    # Training database
+    └── data_statistics.npz # Prior distribution stats
+```
+
+See [docs/FLOWR_DATA_ENGINEERING.md](docs/FLOWR_DATA_ENGINEERING.md) for detailed documentation.
+
 ### Phase III: Fine-Tuning FLOWR.ROOT
 We adapt the generalist FLOWR.ROOT foundation model to the specific geometric and electrostatic boundary conditions of the target protein's dynamic pocket
 * **Flow Matching Architecture:** FLOWR.ROOT uses Continuous Normalizing Flows to learn a time-dependent vector field that transports a prior noise distribution to valid ligand structures, respecting SE(3)-equivariance
 * **Low-Rank Adaptation (LoRA):** To prevent catastrophic forgetting of general chemical rules, we apply LoRA adapters to the model's cross-attention layers while freezing the backbone weights
 * **Joint Training:** The model is trained with a combined loss function, optimizing both the flow matching objective for structure generation and MSE loss for the joint affinity prediction head
+
+```bash
+# Fine-tune FLOWR.ROOT with LoRA
+python scripts/train.py \
+    --config configs/finetune_bioemu.yaml \
+    --resume_from_checkpoint checkpoints/flowr_root_base.pt \
+    --data_path flowr_training_data/final/custom_data.lmdb \
+    --use_lora True \
+    --lora_rank 16 \
+    --loss_weight_flow 1.0 \
+    --loss_weight_affinity 0.5 \
+    --log_dir logs/finetune_bioemu_v1
+
+# Or use SLURM (A100 GPU recommended)
+sbatch slurm/finetune.sl
+```
+
+**Fine-Tuning Configuration:**
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| Learning Rate | 1e-5 | Low rate to prevent forgetting |
+| Batch Size | 16-32 | Memory-intensive SE(3) models |
+| LoRA Rank | 16 | Balance adaptability vs. parameters |
+| Target Layers | Cross-attention | Learn new protein-ligand rules |
+| Epochs | 50-100 | Monitor validation loss |
+
 ### Phase IV: Inference, Steering, and Validation
 Once fine-tuned, the model serves as a bespoke generator for the target, followed by rigorous physics-based validation
 * **Affinity Steering:** During inference, we generate thousands of trajectories by solving the ODE and use the trained affinity head to perform importance sampling, prioritizing high-affinity "super-binders"

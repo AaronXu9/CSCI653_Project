@@ -1,0 +1,189 @@
+# FLOWR.ROOT Fine-Tuning Configuration for BioEmu Ensembles
+# 
+# This configuration is designed for fine-tuning the FLOWR.ROOT foundation
+# model on synthetic holo-set data generated from BioEmu protein ensembles.
+#
+# Key Design Decisions:
+#   - LoRA on cross-attention layers to learn new protein-ligand interactions
+#   - Frozen backbone to preserve general chemical validity rules
+#   - Low learning rate to avoid catastrophic forgetting
+#   - Combined loss for joint structure generation and affinity prediction
+
+# Model Architecture
+model:
+  name: flowr_root
+  hidden_dim: 256
+  num_layers: 6
+  num_heads: 8
+  dropout: 0.1
+  
+  # SE(3)-Equivariant components
+  se3_type: tfn  # Tensor Field Network
+  fiber_hidden: 32
+  fiber_out: 16
+  num_radial_basis: 50
+  radial_cutoff: 10.0  # Angstroms
+  
+  # Pocket encoder
+  pocket_encoder:
+    num_layers: 4
+    hidden_dim: 256
+    
+  # Ligand decoder  
+  ligand_decoder:
+    num_layers: 6
+    hidden_dim: 256
+    cross_attention: true
+    
+  # Affinity prediction head
+  affinity_head:
+    hidden_dim: 128
+    num_layers: 2
+    dropout: 0.2
+
+# LoRA Configuration
+lora:
+  enabled: true
+  rank: 16  # Low rank for parameter efficiency
+  alpha: 32  # Scaling factor (alpha/rank)
+  dropout: 0.1
+  
+  # Target modules for LoRA adaptation
+  target_modules:
+    - cross_attention.query
+    - cross_attention.key
+    - cross_attention.value
+    - cross_attention.output
+  
+  # Modules to keep frozen (self-attention for ligand chemistry)
+  frozen_modules:
+    - self_attention
+    - ligand_embedding
+    - bond_predictor
+
+# Data Configuration
+data:
+  train_path: null  # Set via command line
+  val_split: 0.1
+  test_split: 0.05
+  
+  # Batching
+  batch_size: 16
+  num_workers: 4
+  pin_memory: true
+  
+  # Augmentation
+  augment:
+    random_rotation: true
+    random_translation: 0.5  # Angstroms
+    noise_std: 0.1  # Coordinate noise
+
+# Training Configuration
+training:
+  # Optimizer
+  optimizer: adamw
+  learning_rate: 1.0e-5  # Low LR for fine-tuning
+  weight_decay: 0.01
+  betas: [0.9, 0.999]
+  
+  # Learning rate schedule
+  scheduler: cosine_with_warmup
+  warmup_steps: 500
+  min_lr_ratio: 0.01
+  
+  # Training duration
+  num_epochs: 50
+  max_steps: null  # Optional max steps override
+  
+  # Gradient handling
+  gradient_clip: 1.0
+  gradient_accumulation_steps: 1
+  
+  # Mixed precision
+  fp16: true
+  bf16: false  # Use if available on A100
+
+# Loss Configuration
+loss:
+  # Flow matching loss (primary objective)
+  flow:
+    weight: 1.0
+    type: ot_cfm  # Optimal Transport Conditional Flow Matching
+    sigma: 0.1  # Noise scale
+    
+  # Affinity prediction loss
+  affinity:
+    weight: 0.5
+    type: mse
+    normalize: true  # Normalize by affinity range
+    
+  # Auxiliary losses (optional)
+  auxiliary:
+    weight: 0.1
+    bond_length: true  # Regularize bond lengths
+    planarity: false   # Enforce aromatic planarity
+    clash: false       # Protein-ligand clash penalty
+
+# Flow Matching Configuration
+flow_matching:
+  # Noise schedule
+  noise_schedule: linear  # or 'cosine', 'sqrt'
+  t_min: 0.0
+  t_max: 1.0
+  
+  # ODE solver for inference
+  ode_solver: euler  # or 'midpoint', 'rk4'
+  num_steps: 100
+  
+  # Optimal transport
+  use_ot: true
+  ot_reg: 0.1  # Entropy regularization
+
+# Validation & Logging
+validation:
+  every_n_epochs: 1
+  num_samples: 100
+  
+  # Metrics to compute
+  metrics:
+    - validity  # Chemical validity rate
+    - uniqueness  # Unique molecules
+    - novelty  # Not in training set
+    - affinity_correlation  # Predicted vs true affinity
+    - rmsd  # Pose accuracy (if reference available)
+
+logging:
+  project: flowr_bioemu_finetune
+  run_name: null  # Auto-generated if null
+  
+  # Logging frequency
+  log_every_n_steps: 10
+  save_every_n_epochs: 5
+  
+  # What to log
+  log_gradients: false
+  log_weights: false
+  log_samples: true
+  num_sample_visualizations: 5
+
+# Checkpointing
+checkpoint:
+  save_dir: checkpoints
+  save_top_k: 3
+  monitor: val_loss
+  mode: min
+  save_last: true
+
+# Hardware
+hardware:
+  accelerator: gpu
+  devices: 1
+  precision: 16-mixed
+  
+  # Distributed training (if multi-GPU)
+  strategy: auto  # or 'ddp', 'deepspeed'
+  sync_batchnorm: true
+
+# Reproducibility
+seed: 42
+deterministic: false  # Set true for reproducibility (slower)
