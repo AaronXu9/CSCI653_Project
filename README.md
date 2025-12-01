@@ -2,7 +2,15 @@
 # Dynamic Generative Structure-Based Drug Design Pipeline
 
 ## Overview
-[Diagram for the Dynamic Generative Structure-Based Drug Design Pipeline](figs/diagram.svg)
+<!-- [Diagram for the Dynamic Generative Structure-Based Drug Design Pipeline](figs/diagram.svg) -->
+
+Traditional SBDD relies on static crystal structures, which often represent single, low-energy minima and miss transient, bioactive conformations such as "cryptic" pockets. To overcome this "static trap," this pipeline integrates biomolecular emulation with geometric deep learning
+
+We utilize **BioEmu** to generate thermodynamic ensembles of the target protein directly from sequence, capturing functional motions and rare states. These ensembles are used to create a synthetic training dataset to fine-tune **FLOWR.ROOT**, an SE(3)-equivariant flow matching generative model This results in a generator explicitly tailored to the dynamic conformational landscape of the target protein
+
+<!-- Pipeline Workflow
+
+The following diagram outlines the four-phase process implemented in this repository: -->
 
 <img src="figs/diagram.svg" alt="Dynamic Generative Structure-Based Drug Design Pipeline">
 
@@ -37,13 +45,6 @@ pip install bioemu[md]   # Installs HPacker, OpenMM, and other MD tools
 
 <!-- This repository houses a state-of-the-art computational pipeline for Structure-Based Drug Design (SBDD) that transitions from traditional static methods toward a dynamic, probabilistic understanding of molecular recognition -->
 
-Traditional SBDD relies on static crystal structures, which often represent single, low-energy minima and miss transient, bioactive conformations such as "cryptic" pockets [cite: 5-7]. To overcome this "static trap," this pipeline integrates biomolecular emulation with geometric deep learning
-
-We utilize **BioEmu** to generate thermodynamic ensembles of the target protein directly from sequence, capturing functional motions and rare states. These ensembles are used to create a synthetic training dataset to fine-tune **FLOWR.ROOT**, an SE(3)-equivariant flow matching generative model This results in a generator explicitly tailored to the dynamic conformational landscape of the target protein
-
-<!-- Pipeline Workflow
-
-The following diagram outlines the four-phase process implemented in this repository: -->
 
 
 ## Detailed Functionality
