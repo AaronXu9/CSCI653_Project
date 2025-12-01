@@ -6,6 +6,8 @@
 
 Traditional SBDD relies on static crystal structures, which often represent single, low-energy minima and miss transient, bioactive conformations such as "cryptic" pockets. To overcome this "static trap," this pipeline integrates biomolecular emulation with geometric deep learning. 
 
+At the same time, even strong bio-foundation models like AlphaFold3 and botlz-2 are trained on generic holo datasets and do not automatically adapt to the idiosyncratic conformational landscape and ligand preferences of a new target. Bridging this gap is further complicated by the cost of MD-based ensemble generation and by the noise and bias of one-off docking runs used in standard virtual screening.
+
 We utilize **BioEmu** to generate thermodynamic ensembles of the target protein directly from sequence, capturing functional motions and rare states. These ensembles are used to create a synthetic training dataset to fine-tune **FLOWR.ROOT**, an SE(3)-equivariant flow matching generative model This results in a generator explicitly tailored to the dynamic conformational landscape of the target protein
 
 
