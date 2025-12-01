@@ -10,7 +10,7 @@
 
 ### Core Software Stack
 
-The following versions are recommended for the pipeline[cite: 271]:
+The following versions are recommended for the pipeline: 
 
 | Component | Software | Version | Role |
 | :--- | :--- | :--- | :--- |
@@ -23,7 +23,7 @@ The following versions are recommended for the pipeline[cite: 271]:
 
 ### Environment Setup
 
-It is recommended to use Conda to manage dependencies. The `bioemu` package requires specific extensions for MD tools used in refinement[cite: 59].
+It is recommended to use Conda to manage dependencies. The `bioemu` package requires specific extensions for MD tools used in refinement
 
 ```bash
 # Create environment
@@ -59,6 +59,18 @@ FLOWR.ROOT requires protein-ligand pairs for supervised training. We generate a 
 * **Massive Batch Docking:** We utilize **Uni-Dock** for its extreme GPU-accelerated throughput to execute large-scale virtual screening against all cluster representatives.
 * **High-Fidelity Rescoring:** Generated poses are rescored using **Gnina's** deep learning CNN scoring function, which is superior at distinguishing real biological binding modes from artifacts.
 * **Data Engineering:** Poses are filtered for high CNN scores (>0.9) and predicted affinity, then featurized and serialized into LMDB format for high-performance I/O during training
+
+```bash
+# Complete pipeline
+python run_pipeline.py \
+    --cluster_dir bioemu_clusters \
+    --ligand_library your_ligands.sdf \
+    --output_dir output \
+    --center 10.5 22.1 -5.4
+
+# Or use SLURM
+sbatch run_ensemble_docking.sbatch
+```
 
 ### Phase III: Fine-Tuning FLOWR.ROOT
 We adapt the generalist FLOWR.ROOT foundation model to the specific geometric and electrostatic boundary conditions of the target protein's dynamic pocket
