@@ -4,6 +4,11 @@
 ## Overview
 [Diagram for the Dynamic Generative Structure-Based Drug Design Pipeline](figs/diagram.svg)
 
+Traditional SBDD relies on static crystal structures, which often represent single, low-energy minima and miss transient, bioactive conformations such as "cryptic" pockets. To overcome this "static trap," this pipeline integrates biomolecular emulation with geometric deep learning. 
+
+We utilize **BioEmu** to generate thermodynamic ensembles of the target protein directly from sequence, capturing functional motions and rare states. These ensembles are used to create a synthetic training dataset to fine-tune **FLOWR.ROOT**, an SE(3)-equivariant flow matching generative model This results in a generator explicitly tailored to the dynamic conformational landscape of the target protein
+
+
 <img src="figs/diagram.svg" alt="Dynamic Generative Structure-Based Drug Design Pipeline">
 
 ## Requirements & Installation
