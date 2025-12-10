@@ -11,7 +11,7 @@ Supported Engines:
 
 from .base import DockingEngine, DockingConfig, DockingResult
 from .unidock import UniDockEngine, UniDockConfig
-from .utils import prepare_receptor_pdbqt, prepare_ligand_pdbqt, detect_binding_site
+from .utils import prepare_receptor_pdbqt, prepare_ligand_pdbqt, detect_binding_site, get_box_from_reference_ligand
 
 __all__ = [
     'DockingEngine',
@@ -22,4 +22,5 @@ __all__ = [
     'prepare_receptor_pdbqt',
     'prepare_ligand_pdbqt',
     'detect_binding_site',
+    'get_box_from_reference_ligand'
 ]

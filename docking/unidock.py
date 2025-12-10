@@ -76,7 +76,7 @@ class UniDockEngine(DockingEngine):
         >>> results = engine.dock()
     """
     
-    EXECUTABLE = 'unidock'
+    EXECUTABLE = '/home/aoxu/miniconda3/envs/unidock2/bin/unidock'
     
     def __init__(self, config: UniDockConfig):
         """Initialize Uni-Dock engine.
@@ -126,18 +126,22 @@ class UniDockEngine(DockingEngine):
         return None
     
     def prepare_receptor(self) -> Path:
-        """Prepare receptor for docking (convert to PDBQT if needed).
+        """Prepare receptor for docking.
+        
+        Uni-Dock supports PDB files directly, so we can skip PDBQT conversion
+        if the input is already a PDB.
         
         Returns:
-            Path to prepared PDBQT receptor file
+            Path to receptor file (PDB or PDBQT)
         """
         receptor_path = self.config.receptor_path
         
-        if receptor_path.suffix.lower() == '.pdbqt':
+        # If it's already PDB or PDBQT, just use it
+        if receptor_path.suffix.lower() in ['.pdb', '.pdbqt']:
             self._prepared_receptor = receptor_path
             return receptor_path
-        
-        # Convert to PDBQT
+            
+        # Otherwise convert to PDBQT (fallback)
         output_dir = self.config.output_dir / 'prepared'
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = output_dir / f"{receptor_path.stem}.pdbqt"
@@ -153,7 +157,7 @@ class UniDockEngine(DockingEngine):
         """Prepare ligands for docking.
         
         Returns:
-            List of paths to prepared PDBQT ligand files
+            List of paths to ligand files (PDBQT or SDF)
         """
         output_dir = self.config.output_dir / 'prepared_ligands'
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -170,7 +174,8 @@ class UniDockEngine(DockingEngine):
         prepared = []
         for ligand_path in ligand_paths:
             try:
-                if ligand_path.suffix.lower() == '.pdbqt':
+                # Uni-Dock supports SDF directly via ligand_index
+                if ligand_path.suffix.lower() in ['.pdbqt', '.sdf']:
                     prepared.append(ligand_path)
                 else:
                     output_path = output_dir / f"{ligand_path.stem}.pdbqt"
@@ -198,10 +203,8 @@ class UniDockEngine(DockingEngine):
             cmd.extend(['--ligand_index', str(self.config.ligand_index)])
         elif self.config.batch_ligand_dir:
             cmd.extend(['--dir', str(self.config.batch_ligand_dir)])
-        elif len(self._prepared_ligands) == 1:
-            cmd.extend(['--ligand', str(self._prepared_ligands[0])])
         else:
-            # Create index file for batch processing
+            # Always use ligand_index to support SDFs and batching
             index_file = self.config.output_dir / 'ligand_index.txt'
             with open(index_file, 'w') as f:
                 for lig in self._prepared_ligands:
@@ -226,8 +229,8 @@ class UniDockEngine(DockingEngine):
         # Scoring function
         cmd.extend(['--scoring', self.config.scoring])
         
-        # GPU batch size
-        cmd.extend(['--gpu_batch_size', str(self.config.gpu_batch_size)])
+        # GPU batch size - removed as it is not supported by the installed version
+        # cmd.extend(['--gpu_batch_size', str(self.config.gpu_batch_size)])
         
         # Search mode
         if self.config.search_mode:

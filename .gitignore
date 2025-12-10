@@ -4,3 +4,14 @@
 # data files
 output/
 bioemu_clusters/
+
+# logs
+*.log
+
+# cache
+__pycache__/
+
+# output 
+docking/
+rescoring/
+rescoring_output

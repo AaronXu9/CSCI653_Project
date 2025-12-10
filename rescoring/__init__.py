@@ -11,7 +11,7 @@ Supported Rescoring Methods:
 
 from .base import RescoringEngine, RescoringConfig, RescoringResult, PoseData
 from .gnina import GninaRescorer, GninaConfig
-from .filters import ScoreFilter, FilterConfig, FilterResult
+from .filters import ScoreFilter, FilterConfig, FilterResult, ResultAggregator
 
 __all__ = [
     'RescoringEngine',
@@ -23,4 +23,5 @@ __all__ = [
     'ScoreFilter',
     'FilterConfig',
     'FilterResult',
+    'ResultAggregator'
 ]

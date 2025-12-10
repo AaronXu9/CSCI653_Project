@@ -20,7 +20,7 @@ def main():
     print(f"CA topology atoms: {ca_topology.n_atoms}")
     
     # Load BioEmu output files
-    npz_files = sorted(glob.glob('output/6CM4/*.npz'))
+    npz_files = sorted(glob.glob('test_output/protein_ensemble/*.npz'))
     # Limit to 100 structures for testing as requested
     npz_files = npz_files[:100]
     
@@ -150,6 +150,14 @@ def main():
         # We save the FULL structure (from 'traj'), not just the pocket
         save_path = os.path.join(output_dir, f"cluster_{k}.pdb")
         traj[closest_member_idx].save(save_path)
+        
+        # Post-process to remove MODEL/ENDMDL tags which confuse Uni-Dock
+        with open(save_path, 'r') as f:
+            lines = f.readlines()
+        with open(save_path, 'w') as f:
+            for line in lines:
+                if not line.startswith('MODEL') and not line.startswith('ENDMDL'):
+                    f.write(line)
         
     print(f"Saved {len(cluster_indices)} cluster representatives to {output_dir}")
 

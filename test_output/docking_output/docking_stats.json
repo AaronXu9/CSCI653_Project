@@ -1,0 +1,16 @@
+[
+  {
+    "cluster": "cluster_0",
+    "status": "success",
+    "n_ligands": 0,
+    "n_poses": 0,
+    "best_score": null
+  },
+  {
+    "cluster": "cluster_1",
+    "status": "success",
+    "n_ligands": 1,
+    "n_poses": 0,
+    "best_score": null
+  }
+]

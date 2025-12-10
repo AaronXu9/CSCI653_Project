@@ -89,7 +89,7 @@ class GninaRescorer(RescoringEngine):
         >>> filtered = rescorer.filter_by_cnn_score(results, threshold=0.9)
     """
     
-    EXECUTABLE = 'gnina'
+    EXECUTABLE = '/home/aoxu/projects/PoseBench/forks/GNINA/gnina'
     
     def __init__(self, config: GninaConfig):
         """Initialize Gnina rescorer.
@@ -227,6 +227,7 @@ class GninaRescorer(RescoringEngine):
             List of RescoringResult objects
         """
         pose_file = Path(pose_file)
+        self.config.output_dir.mkdir(parents=True, exist_ok=True)
         output_file = self.config.output_dir / f"{pose_file.stem}_gnina.sdf"
         
         # Build and run command

@@ -90,6 +90,17 @@ def prepare_receptor_pdbqt(
             cmd.extend(['--delete', 'HOH'])
         
         result = run_command(cmd, check=True)
+        
+        # Post-process to remove ROOT/ENDROOT/TORSDOF if present (Open Babel adds them sometimes)
+        with open(output_path, 'r') as f:
+            lines = f.readlines()
+        
+        with open(output_path, 'w') as f:
+            for line in lines:
+                if line.startswith('ROOT') or line.startswith('ENDROOT') or line.startswith('TORSDOF'):
+                    continue
+                f.write(line)
+
         logger.info(f"Prepared receptor using Open Babel: {output_path}")
         return output_path
         
