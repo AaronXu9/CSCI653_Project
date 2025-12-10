@@ -1,0 +1,3 @@
+[submodule "flowr_root"]
+	path = flowr_root
+	url = https://github.com/jule-c/flowr_root.git
