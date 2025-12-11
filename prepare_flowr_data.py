@@ -21,7 +21,7 @@ Usage:
         --cnn_affinity_threshold -7.0
 
     # From existing raw directory (resume)
-    python prepare_flowr_data.py \
+    python prepare_flowr_data.py \    mamba env create -f flowr_root/environment.yml
         --raw_dir flowr_training_data/raw \
         --output_dir flowr_training_data
 
@@ -50,6 +50,7 @@ import sys
 import json
 from pathlib import Path
 from typing import List, Dict, Any, Optional
+from rdkit import Chem
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
@@ -100,8 +101,8 @@ def parse_args():
                               help='CSV/JSON with scores for filtering')
     filter_group.add_argument('--cnn_score_threshold', type=float, default=0.9,
                               help='Minimum CNN score (0-1)')
-    filter_group.add_argument('--cnn_affinity_threshold', type=float, default=-7.0,
-                              help='Maximum CNN affinity (more negative = tighter)')
+    filter_group.add_argument('--cnn_affinity_threshold', type=float, default=6.0,
+                              help='Affinity threshold (positive=pKd/higher-better, negative=energy/lower-better)')
     filter_group.add_argument('--top_n_per_cluster', type=int,
                               help='Take top N poses per cluster')
     
@@ -174,40 +175,97 @@ def load_rescoring_results(rescoring_dir: Path,
             continue
         
         cluster_name = cluster_dir.name
+        cluster_results = []
         
         # Look for JSON results
         for json_file in cluster_dir.glob('*_rescored.json'):
-            with open(json_file) as f:
-                data = json.load(f)
-            
-            cluster_results = []
-            for pose in data.get('poses', [data]):
-                scores = pose.get('scores', pose)
-                cnn_score = scores.get('CNNscore', 0)
-                cnn_affinity = scores.get('CNNaffinity', 0)
+            try:
+                with open(json_file) as f:
+                    data = json.load(f)
                 
-                # Apply filters
-                if cnn_score < score_threshold:
-                    continue
-                if cnn_affinity > affinity_threshold:
-                    continue
+                for pose in data.get('poses', [data]):
+                    scores = pose.get('scores', pose)
+                    cnn_score = float(scores.get('CNNscore', 0))
+                    cnn_affinity = float(scores.get('CNNaffinity', 0))
+                    
+                    # Apply filters
+                    if cnn_score < score_threshold:
+                        continue
+                    
+                    if affinity_threshold > 0:
+                        # pKd: higher is better
+                        if cnn_affinity < affinity_threshold:
+                            continue
+                    else:
+                        # Binding energy: lower is better
+                        if cnn_affinity > affinity_threshold:
+                            continue
+                    
+                    cluster_results.append({
+                        'cluster': cluster_name,
+                        'ligand': pose.get('ligand_name', json_file.stem),
+                        'pose_file': pose.get('pose_file', str(cluster_dir / f"{json_file.stem}.sdf")),
+                        'pose_index': pose.get('pose_index', 0),
+                        'CNNscore': cnn_score,
+                        'CNNaffinity': cnn_affinity,
+                        'scores': scores
+                    })
+            except Exception as e:
+                logger.warning(f"Failed to parse JSON {json_file}: {e}")
+
+        # Look for SDF results (if no JSON found or in addition)
+        for sdf_file in cluster_dir.glob('*.sdf'):
+            # Skip if it looks like an input file (not output)
+            if '_out' not in sdf_file.name and 'gnina' not in sdf_file.name:
+                continue
                 
-                cluster_results.append({
-                    'cluster': cluster_name,
-                    'ligand': pose.get('ligand_name', json_file.stem),
-                    'pose_file': pose.get('pose_file', str(cluster_dir / f"{json_file.stem}.sdf")),
-                    'pose_index': pose.get('pose_index', 0),
-                    'CNNscore': cnn_score,
-                    'CNNaffinity': cnn_affinity,
-                    'scores': scores
-                })
-            
-            # Sort by affinity and take top N
+            try:
+                suppl = Chem.SDMolSupplier(str(sdf_file))
+                for i, mol in enumerate(suppl):
+                    if mol is None:
+                        continue
+                    
+                    if not mol.HasProp('CNNscore') or not mol.HasProp('CNNaffinity'):
+                        continue
+                        
+                    cnn_score = float(mol.GetProp('CNNscore'))
+                    cnn_affinity = float(mol.GetProp('CNNaffinity'))
+                    
+                    # Apply filters
+                    if cnn_score < score_threshold:
+                        continue
+                    
+                    if affinity_threshold > 0:
+                        # pKd: higher is better
+                        if cnn_affinity < affinity_threshold:
+                            continue
+                    else:
+                        # Binding energy: lower is better
+                        if cnn_affinity > affinity_threshold:
+                            continue
+                            
+                    cluster_results.append({
+                        'cluster': cluster_name,
+                        'ligand': mol.GetProp('_Name') if mol.HasProp('_Name') else sdf_file.stem,
+                        'pose_file': str(sdf_file),
+                        'pose_index': i,
+                        'CNNscore': cnn_score,
+                        'CNNaffinity': cnn_affinity,
+                        'scores': {'CNNscore': cnn_score, 'CNNaffinity': cnn_affinity}
+                    })
+            except Exception as e:
+                logger.warning(f"Failed to parse SDF {sdf_file}: {e}")
+        
+        # Sort by affinity and take top N
+        if affinity_threshold > 0:
+            cluster_results.sort(key=lambda x: x['CNNaffinity'], reverse=True)
+        else:
             cluster_results.sort(key=lambda x: x['CNNaffinity'])
-            if top_n:
-                cluster_results = cluster_results[:top_n]
             
-            results.extend(cluster_results)
+        if top_n:
+            cluster_results = cluster_results[:top_n]
+        
+        results.extend(cluster_results)
     
     logger.info(f"Loaded {len(results)} filtered results from {rescoring_dir}")
     return results
@@ -236,8 +294,19 @@ def load_rescoring_json(json_path: Path,
         cnn_score = scores.get('CNNscore', 0)
         cnn_affinity = scores.get('CNNaffinity', 0)
         
-        if cnn_score >= score_threshold and cnn_affinity <= affinity_threshold:
-            filtered.append(result)
+        if cnn_score < score_threshold:
+            continue
+            
+        if affinity_threshold > 0:
+            # pKd: higher is better
+            if cnn_affinity < affinity_threshold:
+                continue
+        else:
+            # Binding energy: lower is better
+            if cnn_affinity > affinity_threshold:
+                continue
+            
+        filtered.append(result)
     
     logger.info(f"Loaded {len(filtered)} filtered results from {json_path}")
     return filtered

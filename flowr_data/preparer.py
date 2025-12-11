@@ -17,11 +17,6 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any, Iterator
 import json
 
-from .featurizer import (
-    FeaturizationConfig, 
-    SystemFeaturizer, 
-    SystemFeatures
-)
 from .lmdb_writer import LMDBWriter, DataStatistics
 from .exporter import PoseExporter, ExportConfig, ExportedSystem
 
@@ -91,15 +86,6 @@ class FlowrDataConfig:
         else:
             self.final_dir = Path(self.final_dir)
     
-    def to_featurization_config(self) -> FeaturizationConfig:
-        """Create FeaturizationConfig from this config."""
-        return FeaturizationConfig(
-            knn_k=self.knn_k,
-            pocket_radius=self.pocket_radius,
-            use_hydrogens=self.use_hydrogens,
-            center_on_ligand=self.center_on_ligand
-        )
-    
     def to_export_config(self) -> ExportConfig:
         """Create ExportConfig from this config."""
         return ExportConfig(
@@ -139,7 +125,7 @@ class FlowrDataPreparer:
         self.config = config
         self._setup_directories()
         
-        self.featurizer = SystemFeaturizer(config.to_featurization_config())
+        # self.featurizer = SystemFeaturizer(config.to_featurization_config())
         self.exporter = PoseExporter(config.to_export_config())
         
         self._exported_systems: List[ExportedSystem] = []
@@ -213,129 +199,6 @@ class FlowrDataPreparer:
         self._exported_systems = PoseExporter.load_manifest(manifest_path)
         return self._exported_systems
     
-    def featurize_system(self, system: ExportedSystem) -> Optional[SystemFeatures]:
-        """Featurize a single exported system.
-        
-        Args:
-            system: ExportedSystem object
-            
-        Returns:
-            SystemFeatures if successful, None otherwise
-        """
-        try:
-            features = self.featurizer.featurize_system(
-                system_id=system.system_id,
-                protein_path=system.protein_path,
-                ligand_path=system.ligand_path,
-                affinity=system.affinity,
-                use_mdtraj=self.config.use_mdtraj,
-                metadata={
-                    'cluster_id': system.cluster_id,
-                    'ligand_name': system.ligand_name,
-                    **system.metadata
-                }
-            )
-            return features
-        except Exception as e:
-            logger.error(f"Failed to featurize {system.system_id}: {e}")
-            return None
-    
-    def featurize_all(self,
-                      systems: Optional[List[ExportedSystem]] = None,
-                      save_pickles: bool = False
-                      ) -> Iterator[SystemFeatures]:
-        """Featurize all systems.
-        
-        Args:
-            systems: List of systems (default: loaded/exported systems)
-            save_pickles: Save individual pickled features
-            
-        Yields:
-            SystemFeatures objects
-        """
-        import pickle
-        
-        if systems is None:
-            systems = self._exported_systems
-        
-        if not systems:
-            # Try to load from manifest
-            self.load_exported_systems()
-            systems = self._exported_systems
-        
-        logger.info(f"Featurizing {len(systems)} systems...")
-        
-        for i, system in enumerate(systems):
-            features = self.featurize_system(system)
-            
-            if features is not None:
-                if save_pickles:
-                    pickle_path = self.config.processed_dir / f'{system.system_id}.pkl'
-                    with open(pickle_path, 'wb') as f:
-                        pickle.dump(features.to_dict(), f)
-                
-                yield features
-            
-            if (i + 1) % 100 == 0:
-                logger.info(f"Featurized {i + 1}/{len(systems)} systems")
-    
-    def featurize_parallel(self,
-                           systems: Optional[List[ExportedSystem]] = None,
-                           n_workers: Optional[int] = None
-                           ) -> Iterator[SystemFeatures]:
-        """Featurize systems in parallel.
-        
-        Args:
-            systems: List of systems
-            n_workers: Number of workers (default: config.n_workers)
-            
-        Yields:
-            SystemFeatures objects
-        """
-        from concurrent.futures import ProcessPoolExecutor, as_completed
-        
-        if systems is None:
-            systems = self._exported_systems
-        
-        if n_workers is None:
-            n_workers = self.config.n_workers
-        
-        logger.info(f"Featurizing {len(systems)} systems with {n_workers} workers...")
-        
-        # Create a serializable featurization function
-        feat_config = self.config.to_featurization_config()
-        use_mdtraj = self.config.use_mdtraj
-        
-        def featurize_one(system_dict):
-            """Worker function for parallel featurization."""
-            from .featurizer import SystemFeaturizer
-            featurizer = SystemFeaturizer(feat_config)
-            
-            try:
-                features = featurizer.featurize_system(
-                    system_id=system_dict['system_id'],
-                    protein_path=Path(system_dict['protein_path']),
-                    ligand_path=Path(system_dict['ligand_path']),
-                    affinity=system_dict['affinity'],
-                    use_mdtraj=use_mdtraj,
-                    metadata=system_dict.get('metadata', {})
-                )
-                return features.to_dict()
-            except Exception as e:
-                return None
-        
-        # Convert systems to dicts for serialization
-        system_dicts = [s.to_dict() for s in systems]
-        
-        with ProcessPoolExecutor(max_workers=n_workers) as executor:
-            futures = {executor.submit(featurize_one, sd): sd 
-                       for sd in system_dicts}
-            
-            for future in as_completed(futures):
-                result = future.result()
-                if result is not None:
-                    yield SystemFeatures.from_dict(result)
-    
     def generate_lmdb(self,
                       systems: Optional[List[ExportedSystem]] = None,
                       parallel: bool = False,
@@ -345,24 +208,36 @@ class FlowrDataPreparer:
         
         Args:
             systems: List of systems (default: loaded/exported)
-            parallel: Use parallel featurization
+            parallel: Use parallel featurization (Ignored for now)
             db_name: Name for database file
             
         Returns:
             DataStatistics object
         """
+        if systems is None:
+            systems = self._exported_systems
+            
+        if not systems:
+            # Try to load from manifest
+            self.load_exported_systems()
+            systems = self._exported_systems
+
         writer = LMDBWriter(
             output_dir=self.config.final_dir,
             db_name=db_name
         )
         
-        if parallel:
-            features_iter = self.featurize_parallel(systems)
-        else:
-            features_iter = self.featurize_all(systems)
+        logger.info(f"Writing {len(systems)} systems to LMDB...")
         
-        for features in features_iter:
-            writer.add_system(features)
+        # We can use tqdm here
+        try:
+            from tqdm import tqdm
+            systems_iter = tqdm(systems, desc="Writing LMDB")
+        except ImportError:
+            systems_iter = systems
+
+        for system in systems_iter:
+            writer.add_system(system)
         
         stats = writer.finalize()
         
@@ -459,19 +334,20 @@ class FlowrDataPreparer:
                 features = reader[idx]
                 
                 # Validate structure
-                assert features.protein_pos.shape[1] == 3
-                assert features.ligand_pos.shape[1] == 3
-                assert len(features.protein_elements) == len(features.protein_pos)
-                assert len(features.ligand_elements) == len(features.ligand_pos)
+                # features is PocketComplex
+                assert features.holo.atoms.coord.shape[1] == 3
+                assert features.ligand.coords.shape[1] == 3
                 
-                logger.debug(f"Sample {idx}: protein={len(features.protein_pos)}, "
-                            f"ligand={len(features.ligand_pos)}, "
-                            f"affinity={features.affinity:.2f}")
+                logger.debug(f"Sample {idx}: protein={len(features.holo.atoms)}, "
+                            f"ligand={len(features.ligand.coords)}, "
+                            f"affinity={features.metadata.get('affinity', 0.0):.2f}")
             
             reader.close()
             logger.info("Validation passed!")
             return True
             
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             logger.error(f"Validation failed: {e}")
             return False

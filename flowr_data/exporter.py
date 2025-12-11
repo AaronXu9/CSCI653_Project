@@ -300,7 +300,18 @@ class PoseExporter:
         if system_dir.exists():
             if not self.config.overwrite:
                 logger.warning(f"System {system_id} already exists, skipping")
-                return None
+                # Return existing system info instead of None
+                return ExportedSystem(
+                    system_id=system_id,
+                    system_dir=system_dir,
+                    protein_path=system_dir / f'{system_id}_protein.pdb',
+                    ligand_path=system_dir / f'{system_id}_ligand.sdf',
+                    affinity=affinity,
+                    cluster_id=cluster_id,
+                    ligand_name=ligand_name,
+                    pose_index=pose_index,
+                    metadata=metadata or {}
+                )
             shutil.rmtree(system_dir)
         
         system_dir.mkdir(parents=True)
@@ -399,6 +410,20 @@ class PoseExporter:
         logger.info(f"Exported {len(exported)} systems from {len(results)} results")
         return exported
     
+    def _get_sdf_score(self, sdf_path: Path, score_key: str) -> float:
+        """Read score from SDF tags."""
+        try:
+            from rdkit import Chem
+            # Use SDMolSupplier to read the first molecule's tags
+            suppl = Chem.SDMolSupplier(str(sdf_path))
+            if len(suppl) > 0 and suppl[0] is not None:
+                mol = suppl[0]
+                if mol.HasProp(score_key):
+                    return float(mol.GetProp(score_key))
+        except Exception:
+            pass
+        return 0.0
+
     def export_from_directory(self,
                               docking_dir: Path,
                               cluster_dir: Path,
@@ -443,15 +468,31 @@ class PoseExporter:
             receptor_path = cluster_pdb_map[cluster_name]
             
             # Find pose files
-            for pose_file in cluster_subdir.glob('*_out.sdf'):
-                ligand_name = pose_file.stem.replace('_out', '')
+            for pose_file in cluster_subdir.glob('*.sdf'):
+                if not pose_file.name.endswith('.sdf'):
+                    continue
+                    
+                ligand_name = pose_file.stem.replace('_out', '').replace('_gnina', '')
                 
                 # Get score
                 score_key = f"{cluster_name}/{ligand_name}"
-                affinity = scores.get(score_key, 0.0)
+                if scores:
+                    affinity = scores.get(score_key, 0.0)
+                else:
+                    # Try to read from SDF
+                    affinity = self._get_sdf_score(pose_file, affinity_key)
                 
-                if affinity < score_threshold:
-                    continue
+                # Check threshold
+                # Note: This assumes "higher is better" if threshold is positive (pKd)
+                # and "lower is better" if threshold is negative (binding energy)
+                if score_threshold > 0:
+                    # pKd or CNNscore: higher is better
+                    if affinity < score_threshold:
+                        continue
+                else:
+                    # Binding energy: lower is better
+                    if affinity > score_threshold:
+                        continue
                 
                 system = self.export_pose(
                     receptor_path=receptor_path,

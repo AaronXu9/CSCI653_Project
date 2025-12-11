@@ -1,0 +1,21 @@
+{
+  "n_systems": 1,
+  "systems": [
+    {
+      "system_id": "system_0001",
+      "system_dir": "test_output/flowr_data/raw/system_0001",
+      "protein_path": "test_output/flowr_data/raw/system_0001/system_0001_protein.pdb",
+      "ligand_path": "test_output/flowr_data/raw/system_0001/system_0001_ligand.sdf",
+      "affinity": 5.4780540466,
+      "cluster_id": "cluster_1",
+      "ligand_name": "1.H",
+      "pose_index": 0,
+      "metadata": {
+        "scores": {
+          "CNNscore": 0.6853696704,
+          "CNNaffinity": 5.4780540466
+        }
+      }
+    }
+  ]
+}

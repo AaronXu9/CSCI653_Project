@@ -16,8 +16,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Iterator
 import numpy as np
+import torch
+import biotite.structure.io.pdb as pdb
+from rdkit import Chem
 
-from .featurizer import SystemFeatures, FeaturizationConfig
+from flowr.util.pocket import ProteinPocket, PocketComplex
+from flowr.util.molrepr import GeometricMol
+from .exporter import ExportedSystem
 
 logger = logging.getLogger(__name__)
 
@@ -28,21 +33,10 @@ class DataStatistics:
     
     These statistics are used by FLOWR.ROOT to define the prior
     distribution for the flow matching process.
-    
-    Attributes:
-        n_systems: Total number of systems
-        protein_element_counts: Count of each protein element type
-        ligand_element_counts: Count of each ligand element type
-        amino_acid_counts: Count of each amino acid type
-        hybridization_counts: Count of each hybridization state
-        ligand_atom_stats: Statistics for number of ligand atoms
-        protein_atom_stats: Statistics for number of protein atoms
-        affinity_stats: Statistics for affinity values
-        position_stats: Statistics for atom positions
     """
     n_systems: int = 0
-    protein_element_counts: np.ndarray = field(default_factory=lambda: np.zeros(7))
-    ligand_element_counts: np.ndarray = field(default_factory=lambda: np.zeros(12))
+    protein_element_counts: np.ndarray = field(default_factory=lambda: np.zeros(7)) # C, N, O, S, H, P, SE
+    ligand_element_counts: np.ndarray = field(default_factory=lambda: np.zeros(100)) # Atomic numbers
     amino_acid_counts: np.ndarray = field(default_factory=lambda: np.zeros(21))
     hybridization_counts: np.ndarray = field(default_factory=lambda: np.zeros(6))
     ligand_atom_stats: Dict[str, float] = field(default_factory=dict)
@@ -50,46 +44,39 @@ class DataStatistics:
     affinity_stats: Dict[str, float] = field(default_factory=dict)
     position_stats: Dict[str, np.ndarray] = field(default_factory=dict)
     
-    def update(self, features: SystemFeatures):
-        """Update statistics with a new system.
-        
-        Args:
-            features: SystemFeatures object
-        """
+    def update(self, system: PocketComplex, affinity: float):
+        """Update statistics with a new system."""
         self.n_systems += 1
         
-        # Update element counts
-        for elem_idx in features.protein_elements:
-            if elem_idx < len(self.protein_element_counts):
-                self.protein_element_counts[elem_idx] += 1
+        # Update protein element counts (simplified)
+        # This is just a placeholder as we don't easily have element indices from AtomArray without mapping
+        # But for now we can skip detailed element counts if not strictly required, or implement a mapping
         
-        for elem_idx in features.ligand_elements:
-            if elem_idx < len(self.ligand_element_counts):
-                self.ligand_element_counts[elem_idx] += 1
+        # Update ligand element counts
+        atomics = system.ligand.atomics
+        if isinstance(atomics, torch.Tensor):
+            atomics = atomics.cpu().numpy()
+        for atomic_num in atomics:
+            if atomic_num < len(self.ligand_element_counts):
+                self.ligand_element_counts[int(atomic_num)] += 1
         
-        # Update amino acid counts
-        for aa_idx in features.protein_amino_acids:
-            if aa_idx < len(self.amino_acid_counts):
-                self.amino_acid_counts[aa_idx] += 1
+        # Update amino acid counts (simplified/skipped for now)
         
         # Update hybridization counts
-        for hyb_idx in features.ligand_hybridization:
-            if hyb_idx < len(self.hybridization_counts):
-                self.hybridization_counts[hyb_idx] += 1
+        if system.ligand.hybridization is not None:
+            hyb = system.ligand.hybridization
+            if isinstance(hyb, torch.Tensor):
+                hyb = hyb.cpu().numpy()
+            for h in hyb:
+                if h < len(self.hybridization_counts):
+                    self.hybridization_counts[int(h)] += 1
     
     def finalize(self, 
                  all_ligand_atoms: List[int],
                  all_protein_atoms: List[int],
                  all_affinities: List[float],
                  all_positions: Optional[List[np.ndarray]] = None):
-        """Compute final statistics.
-        
-        Args:
-            all_ligand_atoms: List of ligand atom counts per system
-            all_protein_atoms: List of protein atom counts per system
-            all_affinities: List of affinity values
-            all_positions: Optional list of all ligand positions
-        """
+        """Compute final statistics."""
         # Normalize counts to probabilities
         prot_total = self.protein_element_counts.sum()
         if prot_total > 0:
@@ -146,56 +133,9 @@ class DataStatistics:
                 'max': all_pos.max(axis=0)
             }
     
-    def save(self, path: Path):
-        """Save statistics to NPZ file.
-        
-        Args:
-            path: Output path for NPZ file
-        """
-        save_dict = {
-            'n_systems': np.array([self.n_systems]),
-            'protein_element_counts': self.protein_element_counts,
-            'ligand_element_counts': self.ligand_element_counts,
-            'amino_acid_counts': self.amino_acid_counts,
-            'hybridization_counts': self.hybridization_counts,
-        }
-        
-        # Add probability distributions if computed
-        if hasattr(self, 'protein_element_probs'):
-            save_dict['protein_element_probs'] = self.protein_element_probs
-        if hasattr(self, 'ligand_element_probs'):
-            save_dict['ligand_element_probs'] = self.ligand_element_probs
-        if hasattr(self, 'amino_acid_probs'):
-            save_dict['amino_acid_probs'] = self.amino_acid_probs
-        if hasattr(self, 'hybridization_probs'):
-            save_dict['hybridization_probs'] = self.hybridization_probs
-        
-        # Add scalar statistics as arrays
-        for stat_name, stat_dict in [
-            ('ligand_atom', self.ligand_atom_stats),
-            ('protein_atom', self.protein_atom_stats),
-            ('affinity', self.affinity_stats)
-        ]:
-            for key, value in stat_dict.items():
-                save_dict[f'{stat_name}_{key}'] = np.array([value])
-        
-        # Add position statistics
-        for key, value in self.position_stats.items():
-            save_dict[f'position_{key}'] = value
-        
-        np.savez(str(path), **save_dict)
-        logger.info(f"Saved statistics to {path}")
-    
     @classmethod
     def load(cls, path: Path) -> 'DataStatistics':
-        """Load statistics from NPZ file.
-        
-        Args:
-            path: Path to NPZ file
-            
-        Returns:
-            DataStatistics object
-        """
+        """Load statistics from NPZ file."""
         data = np.load(str(path), allow_pickle=True)
         
         stats = cls(
@@ -239,31 +179,55 @@ class DataStatistics:
         
         return stats
 
+    def save(self, path: Path):
+        """Save statistics to NPZ file."""
+        save_dict = {
+            'n_systems': np.array([self.n_systems]),
+            'protein_element_counts': self.protein_element_counts,
+            'ligand_element_counts': self.ligand_element_counts,
+            'amino_acid_counts': self.amino_acid_counts,
+            'hybridization_counts': self.hybridization_counts,
+        }
+        
+        # Add probability distributions if computed
+        if hasattr(self, 'protein_element_probs'):
+            save_dict['protein_element_probs'] = self.protein_element_probs
+        if hasattr(self, 'ligand_element_probs'):
+            save_dict['ligand_element_probs'] = self.ligand_element_probs
+        if hasattr(self, 'amino_acid_probs'):
+            save_dict['amino_acid_probs'] = self.amino_acid_probs
+        if hasattr(self, 'hybridization_probs'):
+            save_dict['hybridization_probs'] = self.hybridization_probs
+        
+        # Add scalar statistics as arrays
+        for stat_name, stat_dict in [
+            ('ligand_atom', self.ligand_atom_stats),
+            ('protein_atom', self.protein_atom_stats),
+            ('affinity', self.affinity_stats)
+        ]:
+            for key, value in stat_dict.items():
+                save_dict[f'{stat_name}_{key}'] = np.array([value])
+        
+        # Add position statistics
+        for key, value in self.position_stats.items():
+            save_dict[f'position_{key}'] = value
+        
+        np.savez(str(path), **save_dict)
+        logger.info(f"Saved statistics to {path}")
+
 
 class LMDBWriter:
     """Writer for LMDB database format.
     
     Serializes featurized systems into LMDB for efficient I/O during
     FLOWR.ROOT training.
-    
-    Example:
-        >>> writer = LMDBWriter(output_dir='flowr_data/final')
-        >>> for features in feature_generator:
-        ...     writer.add_system(features)
-        >>> stats = writer.finalize()
     """
     
     def __init__(self,
                  output_dir: Path,
                  map_size: int = 1024 ** 4,  # 1TB default
                  db_name: str = 'custom_data'):
-        """Initialize LMDB writer.
-        
-        Args:
-            output_dir: Output directory
-            map_size: Maximum database size in bytes
-            db_name: Name for the database file
-        """
+        """Initialize LMDB writer."""
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
@@ -292,68 +256,92 @@ class LMDBWriter:
         self._env = lmdb.open(
             str(self.db_path),
             map_size=self.map_size,
-            subdir=False,
+            subdir=True,
             readonly=False,
             meminit=False,
             map_async=True
         )
         self._txn = self._env.begin(write=True)
     
-    def add_system(self, features: SystemFeatures, commit_every: int = 100):
-        """Add a featurized system to the database.
+    def add_system(self, exported_system: ExportedSystem, commit_every: int = 100):
+        """Add a system to the database.
         
         Args:
-            features: SystemFeatures object
+            exported_system: ExportedSystem object
             commit_every: Commit transaction every N systems
         """
         if self._env is None:
             self._open_db()
         
-        # Serialize features
-        key = f'{self._index:08d}'.encode()
-        value = pickle.dumps(features.to_dict())
-        
-        self._txn.put(key, value)
-        
-        # Update statistics
-        self._stats.update(features)
-        self._ligand_atoms.append(len(features.ligand_elements))
-        self._protein_atoms.append(len(features.protein_elements))
-        self._affinities.append(features.affinity)
-        self._ligand_positions.append(features.ligand_pos)
-        
-        self._index += 1
-        
-        # Periodic commit
-        if self._index % commit_every == 0:
-            self._txn.commit()
-            self._txn = self._env.begin(write=True)
-            logger.info(f"Committed {self._index} systems")
-    
-    def add_systems(self, 
-                    features_iter: Iterator[SystemFeatures],
-                    total: Optional[int] = None):
-        """Add multiple systems from an iterator.
-        
-        Args:
-            features_iter: Iterator of SystemFeatures objects
-            total: Total number (for progress bar)
-        """
         try:
-            from tqdm import tqdm
-            features_iter = tqdm(features_iter, total=total, desc="Writing LMDB")
-        except ImportError:
-            pass
-        
-        for features in features_iter:
-            self.add_system(features)
+            # 1. Load Protein
+            pdb_file = pdb.PDBFile.read(str(exported_system.protein_path))
+            structure = pdb.get_structure(pdb_file, model=1)
+            # Filter out water and heteroatoms if needed, but ProteinPocket might handle it
+            # For now, assume the PDB is clean or ProteinPocket handles it
+            # We need to pass atoms to ProteinPocket
+            # ProteinPocket expects AtomArray
+            
+            # Create ProteinPocket
+            # We can use ProteinPocket.from_pocket_atoms(structure)
+            # But we need to make sure structure is an AtomArray
+            if structure.array_length() == 0:
+                logger.warning(f"Empty structure for {exported_system.system_id}")
+                return
+
+            protein_pocket = ProteinPocket.from_pocket_atoms(structure, infer_res_bonds=True)
+            
+            # 2. Load Ligand
+            suppl = Chem.SDMolSupplier(str(exported_system.ligand_path), removeHs=False)
+            mol = next(suppl)
+            if mol is None:
+                logger.warning(f"Failed to load ligand for {exported_system.system_id}")
+                return
+                
+            # Create GeometricMol
+            geometric_mol = GeometricMol.from_rdkit(mol)
+            
+            # 3. Create PocketComplex
+            # PocketComplex(holo, ligand, metadata)
+            # holo is the protein pocket
+            metadata = exported_system.metadata.copy()
+            metadata['affinity'] = exported_system.affinity
+            metadata['system_id'] = exported_system.system_id
+            
+            complex_system = PocketComplex(
+                holo=protein_pocket,
+                ligand=geometric_mol,
+                metadata=metadata
+            )
+            
+            # 4. Serialize
+            key = str(self._index).encode()
+            value = complex_system.to_bytes()
+            
+            self._txn.put(key, value)
+            
+            # Update statistics
+            self._stats.update(complex_system, exported_system.affinity)
+            self._ligand_atoms.append(len(geometric_mol.atomics))
+            self._protein_atoms.append(len(protein_pocket.atoms))
+            self._affinities.append(exported_system.affinity)
+            self._ligand_positions.append(geometric_mol.coords.cpu().numpy())
+            
+            self._index += 1
+            
+            # Periodic commit
+            if self._index % commit_every == 0:
+                self._txn.commit()
+                self._txn = self._env.begin(write=True)
+                logger.info(f"Committed {self._index} systems")
+                
+        except Exception as e:
+            logger.error(f"Error processing system {exported_system.system_id}: {e}")
+            import traceback
+            traceback.print_exc()
     
     def finalize(self) -> DataStatistics:
-        """Finalize database and compute statistics.
-        
-        Returns:
-            DataStatistics object
-        """
+        """Finalize database and compute statistics."""
         if self._txn is not None:
             # Store total count
             self._txn.put(b'__len__', str(self._index).encode())
@@ -389,14 +377,13 @@ class LMDBWriter:
         if self._env is not None:
             self._env.close()
 
-
 class LMDBReader:
     """Reader for LMDB database format.
     
     Example:
         >>> reader = LMDBReader('flowr_data/final/custom_data.lmdb')
-        >>> for features in reader:
-        ...     print(features.system_id)
+        >>> for system in reader:
+        ...     print(system.metadata['system_id'])
         >>> reader.close()
     """
     
@@ -412,12 +399,19 @@ class LMDBReader:
             raise ImportError("lmdb required: pip install lmdb")
         
         self.db_path = Path(db_path)
+        
+        # Check if it's a file or directory to set subdir correctly
+        subdir = True
+        if self.db_path.is_file():
+            subdir = False
+            
         self._env = lmdb.open(
             str(self.db_path),
             readonly=True,
             lock=False,
             readahead=False,
-            meminit=False
+            meminit=False,
+            subdir=subdir
         )
         
         with self._env.begin() as txn:
@@ -427,58 +421,25 @@ class LMDBReader:
     def __len__(self) -> int:
         return self._length
     
-    def __getitem__(self, idx: int) -> SystemFeatures:
+    def __getitem__(self, idx: int) -> PocketComplex:
         if idx < 0 or idx >= self._length:
             raise IndexError(f"Index {idx} out of range [0, {self._length})")
         
-        key = f'{idx:08d}'.encode()
+        key = str(idx).encode()
         
         with self._env.begin() as txn:
             value = txn.get(key)
             if value is None:
                 raise KeyError(f"Key {key} not found")
             
-            data = pickle.loads(value)
-            return SystemFeatures.from_dict(data)
-    
-    def __iter__(self) -> Iterator[SystemFeatures]:
-        for i in range(self._length):
-            yield self[i]
-    
+            return PocketComplex.from_bytes(value)
+            
     def close(self):
-        """Close the database."""
-        if self._env is not None:
+        if self._env:
             self._env.close()
-    
+            
     def __enter__(self):
         return self
-    
+        
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
-
-
-def merge_lmdb_databases(db_paths: List[Path],
-                         output_path: Path,
-                         db_name: str = 'custom_data') -> DataStatistics:
-    """Merge multiple LMDB databases into one.
-    
-    Args:
-        db_paths: List of LMDB file paths
-        output_path: Output directory
-        db_name: Name for merged database
-        
-    Returns:
-        DataStatistics for merged database
-    """
-    writer = LMDBWriter(output_path, db_name=db_name)
-    
-    for db_path in db_paths:
-        logger.info(f"Merging {db_path}")
-        reader = LMDBReader(db_path)
-        
-        for features in reader:
-            writer.add_system(features)
-        
-        reader.close()
-    
-    return writer.finalize()

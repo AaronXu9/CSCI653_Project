@@ -35,29 +35,28 @@
 ###############################################################################
 
 # Configuration
-FLOWR_DIR="${FLOWR_DIR:-/path/to/flowr}"
-WORKSPACE_DIR="${WORKSPACE_DIR:-/path/to/CSCI653_Project}"
+FLOWR_DIR="${FLOWR_DIR:-$(pwd)/flowr_root}"
+WORKSPACE_DIR="${WORKSPACE_DIR:-$(pwd)}"
 DATA_PATH="${DATA_PATH:-${WORKSPACE_DIR}/flowr_training_data/final/custom_data.lmdb}"
-CHECKPOINT="${CHECKPOINT:-${FLOWR_DIR}/checkpoints/flowr_root_base.pt}"
-CONFIG="${CONFIG:-${WORKSPACE_DIR}/configs/finetune_bioemu.yaml}"
+CHECKPOINT="${CHECKPOINT:-${FLOWR_DIR}/checkpoints/flowr_root.ckpt}"
 LOG_DIR="${LOG_DIR:-${WORKSPACE_DIR}/logs/finetune_$(date +%Y%m%d_%H%M%S)}"
 
 # LoRA Configuration
 USE_LORA="${USE_LORA:-True}"
 LORA_RANK="${LORA_RANK:-16}"
 LORA_ALPHA="${LORA_ALPHA:-32}"
-LORA_DROPOUT="${LORA_DROPOUT:-0.1}"
 
 # Training Hyperparameters
-LEARNING_RATE="${LEARNING_RATE:-1e-5}"
-BATCH_SIZE="${BATCH_SIZE:-16}"
-NUM_EPOCHS="${NUM_EPOCHS:-50}"
+LEARNING_RATE="${LEARNING_RATE:-1e-4}"
+BATCH_COST="${BATCH_COST:-4}"
+NUM_EPOCHS="${NUM_EPOCHS:-100}"
 WARMUP_STEPS="${WARMUP_STEPS:-500}"
 
 # Loss Weights
-LOSS_WEIGHT_FLOW="${LOSS_WEIGHT_FLOW:-1.0}"
-LOSS_WEIGHT_AFFINITY="${LOSS_WEIGHT_AFFINITY:-0.5}"
-LOSS_WEIGHT_AUX="${LOSS_WEIGHT_AUX:-0.1}"
+LOSS_WEIGHT_COORD="${LOSS_WEIGHT_COORD:-1.0}"
+LOSS_WEIGHT_TYPE="${LOSS_WEIGHT_TYPE:-1.0}"
+LOSS_WEIGHT_BOND="${LOSS_WEIGHT_BOND:-2.0}"
+LOSS_WEIGHT_AFFINITY="${LOSS_WEIGHT_AFFINITY:-1.0}"
 
 # Environment setup
 echo "=============================================="
@@ -72,95 +71,98 @@ echo "Configuration:"
 echo "  FLOWR directory: ${FLOWR_DIR}"
 echo "  Data path: ${DATA_PATH}"
 echo "  Checkpoint: ${CHECKPOINT}"
-echo "  Config: ${CONFIG}"
 echo "  Log directory: ${LOG_DIR}"
 echo ""
 echo "LoRA Settings:"
 echo "  Use LoRA: ${USE_LORA}"
 echo "  Rank: ${LORA_RANK}"
 echo "  Alpha: ${LORA_ALPHA}"
-echo "  Dropout: ${LORA_DROPOUT}"
 echo ""
 echo "Training Parameters:"
 echo "  Learning rate: ${LEARNING_RATE}"
-echo "  Batch size: ${BATCH_SIZE}"
+echo "  Batch cost: ${BATCH_COST}"
 echo "  Epochs: ${NUM_EPOCHS}"
 echo "  Warmup steps: ${WARMUP_STEPS}"
 echo ""
 echo "Loss Weights:"
-echo "  Flow: ${LOSS_WEIGHT_FLOW}"
+echo "  Coord: ${LOSS_WEIGHT_COORD}"
+echo "  Type: ${LOSS_WEIGHT_TYPE}"
+echo "  Bond: ${LOSS_WEIGHT_BOND}"
 echo "  Affinity: ${LOSS_WEIGHT_AFFINITY}"
-echo "  Auxiliary: ${LOSS_WEIGHT_AUX}"
 echo "=============================================="
-
-# Load modules (adjust for your HPC system)
-# module load python/3.10
-# module load cuda/11.8
-# module load cudnn/8.6
 
 # Activate conda environment
 source ~/.bashrc
-conda activate flowr_env  # Your FLOWR environment
+# Use mamba activate if available, otherwise conda
+if command -v mamba &> /dev/null; then
+    mamba activate flowr_root
+else
+    conda activate flowr_root
+fi
 
 # Create directories
 mkdir -p "${LOG_DIR}"
-mkdir -p "${LOG_DIR}/checkpoints"
 mkdir -p logs
 
 # Verify prerequisites
-if [ ! -f "${DATA_PATH}" ]; then
-    echo "ERROR: Data file not found: ${DATA_PATH}"
+if [ ! -e "${DATA_PATH}" ]; then
+    echo "ERROR: Data path not found: ${DATA_PATH}"
     exit 1
 fi
 
 if [ ! -f "${CHECKPOINT}" ]; then
     echo "WARNING: Checkpoint not found: ${CHECKPOINT}"
-    echo "Training from scratch..."
-    CHECKPOINT=""
+    echo "Training from scratch (or using random init if no ckpt provided)..."
+    CHECKPOINT_ARG=""
+else
+    CHECKPOINT_ARG="--ckpt_path ${CHECKPOINT}"
 fi
-
-# Check GPU
-nvidia-smi
-echo ""
 
 # Change to FLOWR directory
 cd "${FLOWR_DIR}"
 
 # Build training command
-TRAIN_CMD="python scripts/train.py"
-
-# Add config if exists
-if [ -f "${CONFIG}" ]; then
-    TRAIN_CMD="${TRAIN_CMD} --config ${CONFIG}"
-fi
-
-# Add checkpoint if exists
-if [ -n "${CHECKPOINT}" ]; then
-    TRAIN_CMD="${TRAIN_CMD} --resume_from_checkpoint ${CHECKPOINT}"
-fi
+TRAIN_CMD="python -m flowr.finetune"
 
 # Add data path
 TRAIN_CMD="${TRAIN_CMD} --data_path ${DATA_PATH}"
+TRAIN_CMD="${TRAIN_CMD} --dataset custom"
+
+# Add checkpoint if exists
+if [ -n "${CHECKPOINT_ARG}" ]; then
+    TRAIN_CMD="${TRAIN_CMD} ${CHECKPOINT_ARG}"
+fi
 
 # Add LoRA settings
-TRAIN_CMD="${TRAIN_CMD} --use_lora ${USE_LORA}"
-TRAIN_CMD="${TRAIN_CMD} --lora_rank ${LORA_RANK}"
-TRAIN_CMD="${TRAIN_CMD} --lora_alpha ${LORA_ALPHA}"
-TRAIN_CMD="${TRAIN_CMD} --lora_dropout ${LORA_DROPOUT}"
+if [ "${USE_LORA}" = "True" ]; then
+    TRAIN_CMD="${TRAIN_CMD} --lora_finetuning"
+    TRAIN_CMD="${TRAIN_CMD} --lora_rank ${LORA_RANK}"
+    TRAIN_CMD="${TRAIN_CMD} --lora_alpha ${LORA_ALPHA}"
+fi
 
 # Add training hyperparameters
-TRAIN_CMD="${TRAIN_CMD} --learning_rate ${LEARNING_RATE}"
-TRAIN_CMD="${TRAIN_CMD} --batch_size ${BATCH_SIZE}"
-TRAIN_CMD="${TRAIN_CMD} --num_epochs ${NUM_EPOCHS}"
-TRAIN_CMD="${TRAIN_CMD} --warmup_steps ${WARMUP_STEPS}"
+TRAIN_CMD="${TRAIN_CMD} --lr ${LEARNING_RATE}"
+TRAIN_CMD="${TRAIN_CMD} --batch_cost ${BATCH_COST}"
+TRAIN_CMD="${TRAIN_CMD} --epochs ${NUM_EPOCHS}"
+TRAIN_CMD="${TRAIN_CMD} --warm_up_steps ${WARMUP_STEPS}"
+TRAIN_CMD="${TRAIN_CMD} --save_dir ${LOG_DIR}"
+
+# Add required arguments
+TRAIN_CMD="${TRAIN_CMD} --pocket_noise fix"
+TRAIN_CMD="${TRAIN_CMD} --pocket_coord_noise_std 0.0"
 
 # Add loss weights
-TRAIN_CMD="${TRAIN_CMD} --loss_weight_flow ${LOSS_WEIGHT_FLOW}"
-TRAIN_CMD="${TRAIN_CMD} --loss_weight_affinity ${LOSS_WEIGHT_AFFINITY}"
-TRAIN_CMD="${TRAIN_CMD} --loss_weight_aux ${LOSS_WEIGHT_AUX}"
+TRAIN_CMD="${TRAIN_CMD} --coord_loss_weight ${LOSS_WEIGHT_COORD}"
+TRAIN_CMD="${TRAIN_CMD} --type_loss_weight ${LOSS_WEIGHT_TYPE}"
+TRAIN_CMD="${TRAIN_CMD} --bond_loss_weight ${LOSS_WEIGHT_BOND}"
 
-# Add logging
-TRAIN_CMD="${TRAIN_CMD} --log_dir ${LOG_DIR}"
+# Add affinity finetuning
+# Note: Cannot use both LoRA and affinity_finetuning (mutually exclusive in scriptutil.py)
+# We prioritize LoRA here. Affinity loss is still calculated via --affinity_loss_weight.
+if [ "${USE_LORA}" = "False" ]; then
+    TRAIN_CMD="${TRAIN_CMD} --affinity_finetuning pkd"
+fi
+TRAIN_CMD="${TRAIN_CMD} --affinity_loss_weight ${LOSS_WEIGHT_AFFINITY}"
 
 # Print and execute command
 echo "Training command:"
@@ -183,14 +185,6 @@ if [ ${EXIT_STATUS} -eq 0 ]; then
     echo ""
     echo "Output files:"
     ls -lh "${LOG_DIR}/"
-    echo ""
-    echo "Checkpoints:"
-    ls -lh "${LOG_DIR}/checkpoints/" 2>/dev/null || echo "No checkpoints saved"
-    echo ""
-    echo "Next steps:"
-    echo "  1. Evaluate the model on a validation set"
-    echo "  2. Run inference to generate new ligands"
-    echo "  3. Validate generated molecules with PoseBusters"
 else
     echo ""
     echo "ERROR: Training failed with exit code ${EXIT_STATUS}"

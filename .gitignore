@@ -4,6 +4,9 @@
 # data files
 output/
 bioemu_clusters/
+flowr_training_data/
+flowr_data_output/
+flowr_output/
 
 # logs
 *.log
